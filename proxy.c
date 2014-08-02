@@ -13,16 +13,22 @@ static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64;
 static const char *accept_hdr = "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n";
 static const char *accept_encoding_hdr = "Accept-Encoding: gzip, deflate\r\n";
 
-/* $begin tinymain */
+/* $begin proxymain */
 /*
- * tiny.c - A simple, iterative HTTP/1.0 Web server that uses the 
+ * proxy.c - A simple, iterative HTTP/1.0 Web server that uses the 
  *     GET method to serve static and dynamic content.
  */
 
 void doit(int fd);
-void do_proxy(int fd);
-void read_requesthdrs(rio_t *rp);
-int parse_uri(char *uri, char *filename, char *cgiargs);
+void read_from_client(int client_connfd, int *nbr_headers, char **headers,
+					 char *server_hostname, char *server_uri, int *server_port);
+int read_requesthdrs(rio_t *rp, char **headers);
+void parse_uri(char *uri, char *server_hostname, char *server_uri, int *server_port); 
+void request_server(int server_connfd, int nbr_headers, char **headers,
+					char *server_hostname, char *server_uri);
+void write_http_line(int server_connfd, char *line);
+void read_from_server(int server_connfd, char *response);
+void respond_to_client(int client_connfd, char *response);
 void serve_static(int fd, char *filename, int filesize);
 void get_filetype(char *filename, char *filetype);
 void serve_dynamic(int fd, char *filename, char *cgiargs);
@@ -31,12 +37,12 @@ void clienterror(int fd, char *cause, char *errnum,
 
 int main(int argc, char **argv) 
 {
-    int listenfd, client_connfd, port, clientlen, server_port, nbr_headers;
+    int listenfd, client_connfd, server_connfd, port, clientlen, server_port, nbr_headers;
     struct sockaddr_in clientaddr;
 	char server_hostname[MAXLINE], server_uri[MAXLINE];
 	// Allow for a maximum of MAX_HEADERS headers
-	char headers[MAX_HEADERS][MAXLINE];	
-	char response[MAXBUF] = "";
+	char *headers[MAX_HEADERS];	
+	char response[MAXBUF];
 
     /* Check command line args */
     if (argc != 2) {
@@ -53,7 +59,7 @@ int main(int argc, char **argv)
 	read_from_client(client_connfd, &nbr_headers, headers, server_hostname, server_uri,
 						 &server_port);
 	server_connfd = Open_clientfd(server_hostname, server_port);
-	request_server(server_connfd, nbr_headers, headers, server_uri);
+	request_server(server_connfd, nbr_headers, headers, server_hostname, server_uri);
 	read_from_server(server_connfd, response);
 	respond_to_client(client_connfd, response);
 
@@ -63,72 +69,24 @@ int main(int argc, char **argv)
 }
 /* $end proxymain */
 
-/*
- * doit - handle one HTTP request/response transaction
- */
-/* $begin doit */
-void doit(int fd) 
-{
-    int is_static;
-    struct stat sbuf;
-    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
-    char filename[MAXLINE], cgiargs[MAXLINE];
-    rio_t rio;
-  
-    /* Read request line and headers */
-    Rio_readinitb(&rio, fd);
-    Rio_readlineb(&rio, buf, MAXLINE);
-    sscanf(buf, "%s %s %s", method, uri, version);
-    if (strcasecmp(method, "GET")) { 
-       clienterror(fd, method, "501", "Not Implemented",
-                "Tiny does not implement this method");
-        return;
-    }
-    read_requesthdrs(&rio);
-
-    /* Parse URI from GET request */
-    is_static = parse_uri(uri, filename, cgiargs);
-    if (stat(filename, &sbuf) < 0) {
-	clienterror(fd, filename, "404", "Not found",
-		    "Tiny couldn't find this file");
-	return;
-    }
-
-    if (is_static) { /* Serve static content */
-	if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {
-	    clienterror(fd, filename, "403", "Forbidden",
-			"Tiny couldn't read the file");
-	    return;
-	}
-	serve_static(fd, filename, sbuf.st_size);
-    }
-    else { /* Serve dynamic content */
-	if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) {
-	    clienterror(fd, filename, "403", "Forbidden",
-			"Tiny couldn't run the CGI program");
-	    return;
-	}
-	serve_dynamic(fd, filename, cgiargs);
-    }
-}
-/* $end doit */
 
 /*
- * do_proxy - handle one HTTP request/response proxy transaction
+ * read_from_client - reads the entire client HTTP request
  */
 /* $begin read_from_client */
-void read_from_client(int fd, int *nbr_headers, char **headers, char *server_hostname, char *server_uri, int *server_port) 
+void read_from_client(int client_connfd, int *nbr_headers, char **headers,
+						 char *server_hostname, char *server_uri, int *server_port) 
 {
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
     rio_t rio;
   
     /* Read request line and headers */
-    Rio_readinitb(&rio, fd);
+    Rio_readinitb(&rio, client_connfd);
     Rio_readlineb(&rio, buf, MAXLINE);
     sscanf(buf, "%s %s %s", method, uri, version);
 	/* Check if the method is GET */
     if (strcasecmp(method, "GET")) { 
-       clienterror(fd, method, "501", "Not Implemented",
+       clienterror(client_connfd, method, "501", "Not Implemented",
                 "Proxy does not implement this method");
         return;
     }
@@ -149,18 +107,18 @@ void read_from_client(int fd, int *nbr_headers, char **headers, char *server_hos
 int read_requesthdrs(rio_t *rp, char **headers) 
 {
 	char buf[MAXLINE];
-	unsigned headers = 0;	
+	unsigned nbr_headers = 0;	
 
     Rio_readlineb(rp, buf, MAXLINE);
-    while(strcmp(buf, "\r\n") && headers < MAX_HEADERS) {
-		strcpy(headers[headers], buf);
+    while(strcmp(buf, "\r\n") && nbr_headers < MAX_HEADERS) {
+		strcpy(headers[nbr_headers], buf);
 		// Ignore User-Agent, Accept, Accept--Encoding, Connection,
 		// Proxy-Encoding headers
-		if(!(strstr(headers[i], "User-Agent:")||strstr(headers[i], "Accept:")||strstr(headers[i], "Accept-Encoding:")||strstr(headers[i], "Connection:")||strstr(headers[i], "Proxy-Connection:")))
-			headers++;
+		if(!(strstr(buf, "User-Agent:")||strstr(buf, "Accept:")||strstr(buf, "Accept-Encoding:")||strstr(buf, "Connection:")||strstr(buf, "Proxy-Connection:")))
+			nbr_headers++;
 		Rio_readlineb(rp, buf, MAXLINE);
     }
-    return headers;
+    return nbr_headers;
 }
 /* $end read_requesthdrs */
 
@@ -169,13 +127,14 @@ int read_requesthdrs(rio_t *rp, char **headers)
  */
 /* $begin parse_uri */
 
-void parse_uri(char *uri, char *server_hostname, char *server_uri, int *server_port) 
+void parse_uri(char *client_uri, char *server_hostname,
+				char *server_uri, int *server_port) 
 {
     char *ptr, *ret;
 	char buf[MAXLINE], port[MAXLINE];
 	size_t hostlen = 0, portlen = 0;
 	
-	ptr = index(uri, ':') + 3;
+	ptr = index(client_uri, ':') + 3;
 	strcpy(buf, ptr);
 
 	if((ret = index(buf, ':')) == NULL){
@@ -190,7 +149,7 @@ void parse_uri(char *uri, char *server_hostname, char *server_uri, int *server_p
 		portlen = ret - ptr; 
 		strncpy(port, buf, portlen);
 		port[portlen] = '\0';
-		*server_port = atoi(port);		// port specified by cient
+		*server_port = atoi(port);		// port specified by client
 	}
 
 	strncpy(server_hostname, buf, hostlen);	
@@ -205,24 +164,26 @@ void parse_uri(char *uri, char *server_hostname, char *server_uri, int *server_p
  */
 /* $begin request_server */
 void request_server(int server_connfd, int nbr_headers, char **headers,
-						char *server_uri);
+					char *server_hostname, char *server_uri)
 {
 	char request[MAXLINE];	
 	unsigned i = 0;
-	sprintf(request, "GET %s HTTP/1.0", server_uri);
+	sprintf(request, "GET %s HTTP/1.0\r\n", server_uri);
 	write_http_line(server_connfd, request);
 
 	// Write the headers
 	
-	if(!strstr(headers[i], "Host:"))
-		write_http_line(server_connfd, "Host: www.cmu.edu");
-	
+	if(!strstr(headers[i], "Host:")){
+		sprintf(request, "Host: %s\r\n", server_hostname);
+		write_http_line(server_connfd, request);
+	}
+
 	// Write compulsory headers
-	write_http_line(server_connfd, user_agent_hdr);
-	write_http_line(server_connfd, accept_hdr);
-	write_http_line(server_connfd, accept_encoding_hdr);
-	write_http_line(server_connfd, "Connection: close");
-	write_http_line(server_connfd, "Proxy-Connection: close");
+	write_http_line(server_connfd, (char *)user_agent_hdr);
+	write_http_line(server_connfd, (char *)accept_hdr);
+	write_http_line(server_connfd, (char *)accept_encoding_hdr);
+	write_http_line(server_connfd, "Connection: close\r\n");
+	write_http_line(server_connfd, "Proxy-Connection: close\r\n");
 
 	// Write other headers supplied by client
 	while(i < nbr_headers){
@@ -231,17 +192,14 @@ void request_server(int server_connfd, int nbr_headers, char **headers,
 	}
 
 	//End request
-	write_http_line(server_connfd, "");
+	write_http_line(server_connfd, "\r\n");
 }
 /* $end request_server */
 
 /* Write a line according to HTTP protocol */
 void write_http_line(int server_connfd, char *line)
 {
-	char request[MAXLINE];
-	sprintf(request, line);
-	strcat(request, "\r\n");
-	Rio_writen(server_connfd, request, strlen(request));
+	Rio_writen(server_connfd, line, strlen(line));
 }
 
 
@@ -254,17 +212,18 @@ void read_from_server(int server_connfd, char *response)
     rio_t rio;
 	char buf[MAXLINE];
 
+	sprintf(response, "%s", "");
     Rio_readinitb(&rio, server_connfd);
     Rio_readlineb(&rio, buf, MAXLINE);
 	
     while(strcmp(buf, "\r\n")) {
 		if (strlen(response) + strlen(buf) > MAXBUF)
-		unix_error("response greater than IO buffer size");
-		strcat(response, buf);
+			unix_error("response greater than IO buffer size");
+		sprintf(response, "%s%s", response, buf);
     	Rio_readlineb(&rio, buf, MAXLINE);
 	}
 
-	strcat(response, "\r\n");
+	sprintf(response, "%s%s", response, buf);
 }
 /* $end read_from_server*/
 
