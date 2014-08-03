@@ -20,11 +20,11 @@ static const char *accept_encoding_hdr = "Accept-Encoding: gzip, deflate\r\n";
  */
 
 void doit(int fd);
-void read_from_client(int client_connfd, int *nbr_headers, char **headers,
+void read_from_client(int client_connfd, int *nbr_headers, char headers[][MAXLINE],
 					 char *server_hostname, char *server_uri, int *server_port);
-int read_requesthdrs(rio_t *rp, char **headers);
+int read_requesthdrs(rio_t *rp, char headers[][MAXLINE]);
 void parse_uri(char *uri, char *server_hostname, char *server_uri, int *server_port); 
-void request_server(int server_connfd, int nbr_headers, char **headers,
+void request_server(int server_connfd, int nbr_headers, char headers[][MAXLINE],
 					char *server_hostname, char *server_uri);
 void write_http_line(int server_connfd, char *line);
 void read_from_server(int server_connfd, char *response);
@@ -41,7 +41,7 @@ int main(int argc, char **argv)
     struct sockaddr_in clientaddr;
 	char server_hostname[MAXLINE], server_uri[MAXLINE];
 	// Allow for a maximum of MAX_HEADERS headers
-	char *headers[MAX_HEADERS];	
+	char headers[MAX_HEADERS][MAXLINE];	
 	char response[MAXBUF];
 
     /* Check command line args */
@@ -52,16 +52,23 @@ int main(int argc, char **argv)
     port = atoi(argv[1]);
 
     listenfd = Open_listenfd(port);
+	//printf("started listening\n");
     while (1) {
 	clientlen = sizeof(clientaddr);
 	client_connfd = Accept(listenfd, (SA *)&clientaddr, (socklen_t *)&clientlen);
+	//printf("connection to client opened\n");
 	//Serve a proxy transaction
-	read_from_client(client_connfd, &nbr_headers, headers, server_hostname, server_uri,
-						 &server_port);
+	read_from_client(client_connfd, &nbr_headers, headers, server_hostname,
+					 server_uri, &server_port);
+	//printf("request read from client\n");
 	server_connfd = Open_clientfd(server_hostname, server_port);
+	//printf("connection to server opened\n");
 	request_server(server_connfd, nbr_headers, headers, server_hostname, server_uri);
+	//printf("request sent to server\n");
 	read_from_server(server_connfd, response);
+	//printf("response read from server\n");
 	respond_to_client(client_connfd, response);
+	//printf("response sent to client\n");
 
 	Close(client_connfd);
 	Close(server_connfd);
@@ -74,7 +81,7 @@ int main(int argc, char **argv)
  * read_from_client - reads the entire client HTTP request
  */
 /* $begin read_from_client */
-void read_from_client(int client_connfd, int *nbr_headers, char **headers,
+void read_from_client(int client_connfd, int *nbr_headers, char headers[][MAXLINE],
 						 char *server_hostname, char *server_uri, int *server_port) 
 {
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
@@ -104,18 +111,19 @@ void read_from_client(int client_connfd, int *nbr_headers, char **headers,
  * Returns nbr of headers read
  */
 /* $begin read_requesthdrs */
-int read_requesthdrs(rio_t *rp, char **headers) 
+int read_requesthdrs(rio_t *rp, char headers[][MAXLINE]) 
 {
 	char buf[MAXLINE];
 	unsigned nbr_headers = 0;	
 
     Rio_readlineb(rp, buf, MAXLINE);
     while(strcmp(buf, "\r\n") && nbr_headers < MAX_HEADERS) {
-		strcpy(headers[nbr_headers], buf);
 		// Ignore User-Agent, Accept, Accept--Encoding, Connection,
 		// Proxy-Encoding headers
-		if(!(strstr(buf, "User-Agent:")||strstr(buf, "Accept:")||strstr(buf, "Accept-Encoding:")||strstr(buf, "Connection:")||strstr(buf, "Proxy-Connection:")))
+		if(!(strstr(buf, "User-Agent:")||strstr(buf, "Accept:")||strstr(buf, "Accept-Encoding:")||strstr(buf, "Connection:")||strstr(buf, "Proxy-Connection:"))){
+			strcpy(headers[nbr_headers], buf);
 			nbr_headers++;
+		}
 		Rio_readlineb(rp, buf, MAXLINE);
     }
     return nbr_headers;
@@ -139,15 +147,15 @@ void parse_uri(char *client_uri, char *server_hostname,
 
 	if((ret = index(buf, ':')) == NULL){
 		ret = index(buf, '/');	
-		hostlen = ret - ptr;
+		hostlen = strlen(ptr) - strlen(ret) ;
 		*server_port = 80;				// Default HTTP port
 	}
 	else{
-		hostlen = ret - ptr;
+		hostlen = strlen(ptr) - strlen(ret);
 		ptr = ret + 1;
 		ret =  index(buf, '/');
 		portlen = ret - ptr; 
-		strncpy(port, buf, portlen);
+		strncpy(port, buf + hostlen + 1, portlen);
 		port[portlen] = '\0';
 		*server_port = atoi(port);		// port specified by client
 	}
@@ -163,36 +171,45 @@ void parse_uri(char *client_uri, char *server_hostname,
  * request_server - send the request to server
  */
 /* $begin request_server */
-void request_server(int server_connfd, int nbr_headers, char **headers,
+void request_server(int server_connfd, int nbr_headers, char headers[][MAXLINE],
 					char *server_hostname, char *server_uri)
 {
 	char request[MAXLINE];	
 	unsigned i = 0;
 	sprintf(request, "GET %s HTTP/1.0\r\n", server_uri);
 	write_http_line(server_connfd, request);
-
+	//printf("Proxy\n----------------\n");
+	//printf("%s", request);
 	// Write the headers
 	
 	if(!strstr(headers[i], "Host:")){
 		sprintf(request, "Host: %s\r\n", server_hostname);
 		write_http_line(server_connfd, request);
+		//printf("%s", request);
 	}
 
 	// Write compulsory headers
 	write_http_line(server_connfd, (char *)user_agent_hdr);
+	//printf("%s", (char *)user_agent_hdr);
 	write_http_line(server_connfd, (char *)accept_hdr);
+	//printf("%s", (char *)accept_hdr);
 	write_http_line(server_connfd, (char *)accept_encoding_hdr);
+	//printf("%s", (char *)accept_encoding_hdr);
 	write_http_line(server_connfd, "Connection: close\r\n");
+	//printf("Connection: close\r\n");
 	write_http_line(server_connfd, "Proxy-Connection: close\r\n");
+	//printf("Proxy-Connection: close\r\n");
 
 	// Write other headers supplied by client
 	while(i < nbr_headers){
 		write_http_line(server_connfd, headers[i]);
+		//printf("%s", headers[i]);
 		i++;
 	}
 
 	//End request
 	write_http_line(server_connfd, "\r\n");
+	//printf("\r\n");
 }
 /* $end request_server */
 
@@ -211,11 +228,13 @@ void read_from_server(int server_connfd, char *response)
 {
     rio_t rio;
 	char buf[MAXLINE];
+	size_t n;
 
 	sprintf(response, "%s", "");
     Rio_readinitb(&rio, server_connfd);
     Rio_readlineb(&rio, buf, MAXLINE);
 	
+	// Read response header
     while(strcmp(buf, "\r\n")) {
 		if (strlen(response) + strlen(buf) > MAXBUF)
 			unix_error("response greater than IO buffer size");
@@ -224,6 +243,14 @@ void read_from_server(int server_connfd, char *response)
 	}
 
 	sprintf(response, "%s%s", response, buf);
+
+	// Read response body
+	while((n = Rio_readlineb(&rio, buf, MAXLINE))!=0){
+		if (strlen(response) + strlen(buf) > MAXBUF)
+			unix_error("response greater than IO buffer size");
+		sprintf(response, "%s%s", response, buf);
+	}
+
 }
 /* $end read_from_server*/
 
@@ -234,6 +261,7 @@ void read_from_server(int server_connfd, char *response)
 /* $begin respond_to_client */
 void respond_to_client(int client_connfd, char *response)
 {
+	printf("%s\n", response);
 	Rio_writen(client_connfd, response, strlen(response));	
 }
 /* $end respond_to_client */

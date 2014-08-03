@@ -9,15 +9,18 @@ CC = gcc
 CFLAGS = -g -Wall
 LDFLAGS = -lpthread
 
+OBJS = proxy.o csapp.o
+
 all: proxy
 
 csapp.o: csapp.c csapp.h
-	$(CC) $(CFLAGS) -c csapp.c
+	$(CC) $(CFLAGS) $(LDFLAGS) -c csapp.c
 
 proxy.o: proxy.c csapp.h
-	$(CC) $(CFLAGS) -c proxy.c
+	$(CC) $(CFLAGS) $(LDFLAGS) -c proxy.c
 
-proxy: proxy.o csapp.o
+proxy: $(OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o proxy $(OBJS)
 
 # Creates a tarball in ../proxylab-handin.tar that you should then
 # hand in to Autolab. DO NOT MODIFY THIS!
