@@ -564,8 +564,11 @@ ssize_t rio_writen(int fd, void *usrbuf, size_t n)
 	if ((nwritten = write(fd, bufp, nleft)) <= 0) {
 	    if (errno == EINTR)  /* interrupted by sig handler return */
 		nwritten = 0;    /* and call write() again */
-	    else
-		return -1;       /* errorno set by write() */
+	    else{
+        	printf("n:%d\tnwritten: %d\tnleft:%d\n", (unsigned)n, (unsigned)nwritten, (unsigned)nleft);
+        	printf("offending buf: %s\n", (char *)usrbuf);
+			return -1;       /* errorno set by write() */
+		}
 	}
 	nleft -= nwritten;
 	bufp += nwritten;
@@ -689,6 +692,7 @@ ssize_t Rio_readn(int fd, void *ptr, size_t nbytes)
     return n;
 }
 
+// Modified to return the number of bytes written 
 void Rio_writen(int fd, void *usrbuf, size_t n) 
 {
     if (rio_writen(fd, usrbuf, n) != n)

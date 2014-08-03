@@ -26,7 +26,7 @@ MAX_PORT_TRIES=10
 
 # List of text and binary files for the basic test
 BASIC_LIST="home.html
-            csapp.c
+			csapp.c
             tiny.c
             godzilla.jpg
             tiny"

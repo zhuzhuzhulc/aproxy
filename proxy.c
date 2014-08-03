@@ -27,7 +27,8 @@ void parse_uri(char *uri, char *server_hostname, char *server_uri, int *server_p
 void request_server(int server_connfd, int nbr_headers, char headers[][MAXLINE],
 					char *server_hostname, char *server_uri);
 void write_http_line(int server_connfd, char *line);
-void read_from_server(int server_connfd, char *response);
+unsigned extract_content_length(char headers[][MAXLINE]);
+int read_from_server(rio_t *rp, int server_connfd, char *response);
 void respond_to_client(int client_connfd, char *response);
 void serve_static(int fd, char *filename, int filesize);
 void get_filetype(char *filename, char *filetype);
@@ -38,6 +39,7 @@ void clienterror(int fd, char *cause, char *errnum,
 int main(int argc, char **argv) 
 {
     int listenfd, client_connfd, server_connfd, port, clientlen, server_port, nbr_headers;
+	rio_t rio;
     struct sockaddr_in clientaddr;
 	char server_hostname[MAXLINE], server_uri[MAXLINE];
 	// Allow for a maximum of MAX_HEADERS headers
@@ -64,14 +66,30 @@ int main(int argc, char **argv)
 	server_connfd = Open_clientfd(server_hostname, server_port);
 	//printf("connection to server opened\n");
 	request_server(server_connfd, nbr_headers, headers, server_hostname, server_uri);
+	unsigned content_size = extract_content_length(headers);
 	//printf("request sent to server\n");
-	read_from_server(server_connfd, response);
-	//printf("response read from server\n");
-	respond_to_client(client_connfd, response);
-	//printf("response sent to client\n");
+    Rio_readinitb(&rio, server_connfd);
+	unsigned bytes_read = 0;
+/*
+	while(read_from_server(&rio, server_connfd, response) > 0){
+		printf("Gonna write: %s", response);
+		Rio_writen(client_connfd, response, strlen(response));	
+		sprintf(response, "%s", "");
+	}
+*/
+	while(bytes_read < content_size){
+		sprintf(response, "%s", "");
+		bytes_read += read_from_server(&rio, server_connfd, response);
+		Rio_writen(client_connfd, response, strlen(response));	
+	}
 
+	//Rio_writen(client_connfd, response, strlen(response));	
+	//printf("response read from server\n");
+	//printf("response sent to client\n");
+	printf("finished transfer\n");
 	Close(client_connfd);
 	Close(server_connfd);
+	printf("closed socket\n");
     }
 }
 /* $end proxymain */
@@ -129,6 +147,18 @@ int read_requesthdrs(rio_t *rp, char headers[][MAXLINE])
     return nbr_headers;
 }
 /* $end read_requesthdrs */
+
+
+/* 
+ *
+ */
+//TODO : Implement this
+unsigned extract_content_length(char headers[][MAXLINE], int nbr_headers)
+{
+	unsigned i = 0;
+	while
+
+}
 
 /*
  * parse_uri - parse URI into hostname and URI
@@ -222,35 +252,39 @@ void write_http_line(int server_connfd, char *line)
 
 /* 
  * read_from_server - Reads the response from server
+ * Returns number of bytes read
  */
 /* $begin read_from_server*/
-void read_from_server(int server_connfd, char *response)
+int read_from_server(rio_t *rp, int server_connfd, char *response)
 {
-    rio_t rio;
 	char buf[MAXLINE];
 	size_t n;
+	unsigned bytes_read;
 
-	sprintf(response, "%s", "");
-    Rio_readinitb(&rio, server_connfd);
-    Rio_readlineb(&rio, buf, MAXLINE);
+    Rio_readlineb(rp, buf, MAXLINE);
 	
 	// Read response header
     while(strcmp(buf, "\r\n")) {
-		if (strlen(response) + strlen(buf) > MAXBUF)
-			unix_error("response greater than IO buffer size");
+		bytes_read = strlen(response) + strlen(buf);
 		sprintf(response, "%s%s", response, buf);
-    	Rio_readlineb(&rio, buf, MAXLINE);
+		if (bytes_read > MAXBUF - MAXLINE)
+			return bytes_read;
+    	Rio_readlineb(rp, buf, MAXLINE);
 	}
 
+	bytes_read = strlen(response) + strlen(buf);
 	sprintf(response, "%s%s", response, buf);
+	if (bytes_read > MAXBUF - MAXLINE)
+		return bytes_read;
 
 	// Read response body
-	while((n = Rio_readlineb(&rio, buf, MAXLINE))!=0){
-		if (strlen(response) + strlen(buf) > MAXBUF)
-			unix_error("response greater than IO buffer size");
+	while((n = Rio_readlineb(rp, buf, MAXLINE))!=0){
+		bytes_read = strlen(response) + strlen(buf);
 		sprintf(response, "%s%s", response, buf);
+		if (bytes_read > MAXBUF - MAXLINE)
+			return bytes_read;
 	}
-
+	return bytes_read;
 }
 /* $end read_from_server*/
 
@@ -261,8 +295,6 @@ void read_from_server(int server_connfd, char *response)
 /* $begin respond_to_client */
 void respond_to_client(int client_connfd, char *response)
 {
-	printf("%s\n", response);
-	Rio_writen(client_connfd, response, strlen(response));	
 }
 /* $end respond_to_client */
 
