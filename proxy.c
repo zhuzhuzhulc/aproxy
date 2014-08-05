@@ -28,7 +28,7 @@ void request_server(int server_connfd, int nbr_headers, char headers[][MAXLINE],
 					char *server_hostname, char *server_uri);
 void write_http_line(int server_connfd, char *line);
 int transfer_response_headers(rio_t *rp, int client_connfd, int *content_size);
-int read_from_server(rio_t *rp, int server_connfd, char *response, int data_type, int content_size);
+int read_from_server(rio_t *rp, int server_connfd, char *response, int data_type, int client_connfd, int bytes_left);
 void respond_to_client(int client_connfd, char *response);
 void serve_static(int fd, char *filename, int filesize);
 void get_filetype(char *filename, char *filetype);
@@ -82,14 +82,14 @@ int main(int argc, char **argv)
 
 	// check type ssize_t
 	// Transfer response body
-	int bytes_read = 0;
+	int bytes_read = 0, n;
+	int bytes_left = content_size;
 	do{
-		sprintf(response, "%s", "");
-		bytes_read += read_from_server(&rio, server_connfd, response, data_type, content_size);
-		printf("bytes read so far: %d\n", bytes_read);
-		Rio_writen(client_connfd, response, strlen(response));	
-		printf("bytes written so far: %d\n", bytes_read);
-	}while(bytes_read < content_size);
+		n = read_from_server(&rio, server_connfd, response, data_type, client_connfd, bytes_left);
+		bytes_read += n;
+		bytes_left -= n;
+		//printf("bytes transferred so far: %d\n", bytes_read);
+	}while(bytes_left > 0);
 
 	//Rio_writen(client_connfd, response, strlen(response));	
 	//printf("response read from server\n");
@@ -202,7 +202,7 @@ int transfer_response_headers(rio_t *rp, int client_connfd, int *content_size)
 		}
 		
 		Rio_writen(client_connfd, buf, strlen(buf));
-		//printf("response header: %s", buf);
+		printf("response header: %s", buf);
 		fflush(stdout);
     	Rio_readlineb(rp, buf, MAXLINE);
 	}
@@ -309,66 +309,63 @@ void write_http_line(int server_connfd, char *line)
  * Returns number of bytes read
  */
 /* $begin read_from_server*/
-int read_from_server(rio_t *rp, int server_connfd, char *response, int data_type, int content_size)
+int read_from_server(rio_t *rp, int server_connfd, char *response, int data_type, int client_connfd, int bytes_left)
 {
 	char buf[MAXLINE];
-	size_t n;
+	ssize_t n;
 	int bytes_read = 0;
 
 	if(data_type == 0){		// read binary data
-	/*
-		if(MAXLINE <= content_size){
-			bytes_read += Rio_readnb(rp, buf, MAXLINE-1);
-			sprintf(response, "%s%s", response, buf);
+		char *bufp = response;	
+	
+		if(MAXLINE <= bytes_left){
+			bytes_read += Rio_readnb(rp, buf, MAXLINE);
+			memcpy(bufp, buf, bytes_read);
 
 		}
 		else{
-			bytes_read += Rio_readnb(rp, buf, content_size);
-			sprintf(response, "%s%s", response, buf);
+			bytes_read += Rio_readnb(rp, buf, bytes_left);
+			memcpy(bufp, buf, bytes_read);
 			// Ensure bytes_read is same as content_size
 		}
-	*/
-			if((bytes_read = Rio_readnb(rp, buf, MAXLINE)) < 0)
-				unix_error("Read server error");
-			sprintf(response, "%s%s", response, buf);
+	
+			//if((bytes_read = Rio_readnb(rp, buf, MAXLINE)) < 0)
+				//unix_error("Read server error");
+			//sprintf(response, "%s%s", response, buf);
 			//printf("read %d bytes so far ");
-	/*	
-		while((n = Rio_readnb(rp, buf, 50))!=0){
-			bytes_read += strlen(response) + strlen(buf);
+/*
+		while((n = Rio_readnb(rp, buf, 50)) >= 50){	// exit on short count 
 			//printf("bytes read are %d", bytes_read);
-			sprintf(response, "%s%s", response, buf);
-			buf += (char *)bytes_read;
+			// use memcpy
+			memcpy(bufp, buf, n);
+			//sprintf(response, "%s%s", response, buf);
+			bytes_read += (int)n;
+			bufp += n;
+			//printf("read %d bytes so far in this block\n", bytes_read);
+			//printf("finished reading a chunk of %d bytes\n", (int)n);
 			if (bytes_read > MAXBUF - 50)
-				return bytes_read;
+				break;
 		}
-	*/	
+
+		memcpy(bufp, buf, n);
+		bytes_read += (int)n;
+*/
+	
+		Rio_writen(client_connfd, response, bytes_read);	
+	//printf("finished reading a block of %d bytes\n", bytes_read);
+		
 	}
 
 	else{					// read text data
-/*
-    	Rio_readlineb(rp, buf, MAXLINE);
-	
-		// Read response header
-    	while(strcmp(buf, "\r\n")) {
-			bytes_read += strlen(response) + strlen(buf);
-			sprintf(response, "%s%s", response, buf);
-			if (bytes_read > MAXBUF - MAXLINE)
-				return bytes_read;
-    		Rio_readlineb(rp, buf, MAXLINE);
-		}
-
-		bytes_read += strlen(response) + strlen(buf);
-		sprintf(response, "%s%s", response, buf);
-		if (bytes_read > MAXBUF - MAXLINE)
-			return bytes_read;
-*/
 		// Read response body
-		while((n = Rio_readlineb(rp, buf, MAXLINE))!=0){
-			bytes_read += strlen(response) + strlen(buf);
+		sprintf(response, "%s", "");
+		while((n = Rio_readlineb(rp, buf, MAXLINE))!=0 && (bytes_read < bytes_left)){
 			sprintf(response, "%s%s", response, buf);
+			bytes_read = strlen(response);
 			if (bytes_read > MAXBUF - MAXLINE)
-				return bytes_read;
+				break;
 		}
+		Rio_writen(client_connfd, response, strlen(response));	
 	}
 	return bytes_read;
 }
@@ -421,7 +418,7 @@ void get_filetype(char *filename, char *filetype)
     else if (strstr(filename, ".jpg"))
 	strcpy(filetype, "image/jpeg");
     else
-	strcpy(filetype, "text/plain");
+	strcpy(filetype, "other");
 }  
 /* $end serve_static */
 

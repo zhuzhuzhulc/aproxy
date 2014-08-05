@@ -29,7 +29,9 @@ BASIC_LIST="home.html
 			csapp.c
             tiny.c
             godzilla.jpg
-            tiny"
+			tiny"
+
+#BASIC_LIST="home.html"
 
 # List of text files for the cache test
 CACHE_LIST="tiny.c
