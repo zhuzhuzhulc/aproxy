@@ -173,7 +173,7 @@ void get_filetype(char *filename, char *filetype)
     else if (strstr(filename, ".jpg"))
 	strcpy(filetype, "image/jpeg");
     else
-	strcpy(filetype, "other");
+	strcpy(filetype, "text/plain");
 }  
 /* $end serve_static */
 
