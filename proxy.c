@@ -27,8 +27,8 @@ void parse_uri(char *uri, char *server_hostname, char *server_uri, int *server_p
 void request_server(int server_connfd, int nbr_headers, char headers[][MAXLINE],
 					char *server_hostname, char *server_uri);
 void write_http_line(int server_connfd, char *line);
-unsigned extract_content_length(char headers[][MAXLINE]);
-int read_from_server(rio_t *rp, int server_connfd, char *response);
+int transfer_response_headers(rio_t *rp, int client_connfd, int *content_size);
+int read_from_server(rio_t *rp, int server_connfd, char *response, int data_type, int content_size);
 void respond_to_client(int client_connfd, char *response);
 void serve_static(int fd, char *filename, int filesize);
 void get_filetype(char *filename, char *filetype);
@@ -66,10 +66,8 @@ int main(int argc, char **argv)
 	server_connfd = Open_clientfd(server_hostname, server_port);
 	//printf("connection to server opened\n");
 	request_server(server_connfd, nbr_headers, headers, server_hostname, server_uri);
-	unsigned content_size = extract_content_length(headers);
 	//printf("request sent to server\n");
     Rio_readinitb(&rio, server_connfd);
-	unsigned bytes_read = 0;
 /*
 	while(read_from_server(&rio, server_connfd, response) > 0){
 		printf("Gonna write: %s", response);
@@ -77,19 +75,29 @@ int main(int argc, char **argv)
 		sprintf(response, "%s", "");
 	}
 */
-	while(bytes_read < content_size){
+	// Transfer response headers
+	// get the content size of body in return
+	int content_size = 0;
+	int data_type = transfer_response_headers(&rio, client_connfd, &content_size);
+
+	// check type ssize_t
+	// Transfer response body
+	int bytes_read = 0;
+	do{
 		sprintf(response, "%s", "");
-		bytes_read += read_from_server(&rio, server_connfd, response);
+		bytes_read += read_from_server(&rio, server_connfd, response, data_type, content_size);
+		printf("bytes read so far: %d\n", bytes_read);
 		Rio_writen(client_connfd, response, strlen(response));	
-	}
+		printf("bytes written so far: %d\n", bytes_read);
+	}while(bytes_read < content_size);
 
 	//Rio_writen(client_connfd, response, strlen(response));	
 	//printf("response read from server\n");
 	//printf("response sent to client\n");
-	printf("finished transfer\n");
+	//printf("finished transfer\n");
 	Close(client_connfd);
 	Close(server_connfd);
-	printf("closed socket\n");
+	//printf("closed socket\n");
     }
 }
 /* $end proxymain */
@@ -153,11 +161,57 @@ int read_requesthdrs(rio_t *rp, char headers[][MAXLINE])
  *
  */
 //TODO : Implement this
+/*
 unsigned extract_content_length(char headers[][MAXLINE], int nbr_headers)
 {
 	unsigned i = 0;
-	while
+	while(i < nbr_headers){
 
+	}
+	
+	printf("Content header not found\n");
+	return 0;
+
+}
+*/
+
+/*
+ *	transfer_response_headers - returns type of content data, 0 for binary and 1 for text
+ */
+int transfer_response_headers(rio_t *rp, int client_connfd, int *content_size)
+{
+	char buf[MAXLINE], tokens[MAXLINE];
+	int type = -1;
+	char *tok;
+
+    Rio_readlineb(rp, buf, MAXLINE);
+    while(strcmp(buf, "\r\n")) {
+		if(strstr(buf, "Content-length:")){
+			strcpy(tokens, buf);
+			tok = strtok(tokens, ":");
+			tok = strtok(NULL, ":");
+			*content_size = atoi(tok);
+		}
+		
+		if(strstr(buf, "Content-type:")){
+			strcpy(tokens, buf);
+			tok = strtok(tokens, ":");
+			tok = strtok(NULL, ":");
+			if(strstr(tok, "text"))	type = 1;
+			else					type = 0;	
+		}
+		
+		Rio_writen(client_connfd, buf, strlen(buf));
+		//printf("response header: %s", buf);
+		fflush(stdout);
+    	Rio_readlineb(rp, buf, MAXLINE);
+	}
+	Rio_writen(client_connfd, buf, strlen(buf));
+
+	if(type < 0)
+		printf("Content-type header absent in response\n");
+	
+	return type;
 }
 
 /*
@@ -255,34 +309,66 @@ void write_http_line(int server_connfd, char *line)
  * Returns number of bytes read
  */
 /* $begin read_from_server*/
-int read_from_server(rio_t *rp, int server_connfd, char *response)
+int read_from_server(rio_t *rp, int server_connfd, char *response, int data_type, int content_size)
 {
 	char buf[MAXLINE];
 	size_t n;
-	unsigned bytes_read;
+	int bytes_read = 0;
 
-    Rio_readlineb(rp, buf, MAXLINE);
-	
-	// Read response header
-    while(strcmp(buf, "\r\n")) {
-		bytes_read = strlen(response) + strlen(buf);
-		sprintf(response, "%s%s", response, buf);
-		if (bytes_read > MAXBUF - MAXLINE)
-			return bytes_read;
-    	Rio_readlineb(rp, buf, MAXLINE);
+	if(data_type == 0){		// read binary data
+	/*
+		if(MAXLINE <= content_size){
+			bytes_read += Rio_readnb(rp, buf, MAXLINE-1);
+			sprintf(response, "%s%s", response, buf);
+
+		}
+		else{
+			bytes_read += Rio_readnb(rp, buf, content_size);
+			sprintf(response, "%s%s", response, buf);
+			// Ensure bytes_read is same as content_size
+		}
+	*/
+			if((bytes_read = Rio_readnb(rp, buf, MAXLINE)) < 0)
+				unix_error("Read server error");
+			sprintf(response, "%s%s", response, buf);
+			//printf("read %d bytes so far ");
+	/*	
+		while((n = Rio_readnb(rp, buf, 50))!=0){
+			bytes_read += strlen(response) + strlen(buf);
+			//printf("bytes read are %d", bytes_read);
+			sprintf(response, "%s%s", response, buf);
+			buf += (char *)bytes_read;
+			if (bytes_read > MAXBUF - 50)
+				return bytes_read;
+		}
+	*/	
 	}
 
-	bytes_read = strlen(response) + strlen(buf);
-	sprintf(response, "%s%s", response, buf);
-	if (bytes_read > MAXBUF - MAXLINE)
-		return bytes_read;
+	else{					// read text data
+/*
+    	Rio_readlineb(rp, buf, MAXLINE);
+	
+		// Read response header
+    	while(strcmp(buf, "\r\n")) {
+			bytes_read += strlen(response) + strlen(buf);
+			sprintf(response, "%s%s", response, buf);
+			if (bytes_read > MAXBUF - MAXLINE)
+				return bytes_read;
+    		Rio_readlineb(rp, buf, MAXLINE);
+		}
 
-	// Read response body
-	while((n = Rio_readlineb(rp, buf, MAXLINE))!=0){
-		bytes_read = strlen(response) + strlen(buf);
+		bytes_read += strlen(response) + strlen(buf);
 		sprintf(response, "%s%s", response, buf);
 		if (bytes_read > MAXBUF - MAXLINE)
 			return bytes_read;
+*/
+		// Read response body
+		while((n = Rio_readlineb(rp, buf, MAXLINE))!=0){
+			bytes_read += strlen(response) + strlen(buf);
+			sprintf(response, "%s%s", response, buf);
+			if (bytes_read > MAXBUF - MAXLINE)
+				return bytes_read;
+		}
 	}
 	return bytes_read;
 }
