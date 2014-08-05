@@ -6,7 +6,8 @@
 # Makefile to build your proxy from sources.
 #
 CC = gcc
-CFLAGS = -g -Wall -DNCACHING
+#CFLAGS = -g -Wall -DNCACHING
+CFLAGS = -g -DNCACHING
 LDFLAGS = -lpthread
 
 OBJS = proxy.o csapp.o cache.o
@@ -28,7 +29,7 @@ proxy: $(OBJS)
 # Creates a tarball in ../proxylab-handin.tar that you should then
 # hand in to Autolab. DO NOT MODIFY THIS!
 handin:
-	(make clean; cd ..; tar cvf proxylab-handin.tar proxylab-handout --exclude tiny --exclude nop-server.py --exclude proxy --exclude driver.sh --exclude port-for-user.pl --exclude free-port.sh --exclude ".*")
+	(make clean; cd ..; tar cvf proxylab-handin.tar aproxy --exclude tiny --exclude nop-server.py --exclude proxy --exclude driver.sh --exclude port-for-user.pl --exclude free-port.sh --exclude ".*")
 
 clean:
 	rm -f *~ *.o proxy core *.tar *.zip *.gzip *.bzip *.gz

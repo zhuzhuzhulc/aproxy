@@ -44,10 +44,8 @@ int main(int argc, char **argv)
 	char headers[MAX_HEADERS][MAXLINE];	
 	char response[MAXBUF];
 
-#ifndef NCACHING 
 	cache_block* cacheData = NULL;
 	char buf[MAXBUF], filetype[MAXLINE];
-#endif
 
     /* Check command line args */
     if (argc != 2) {
@@ -56,10 +54,10 @@ int main(int argc, char **argv)
     }
     port = atoi(argv[1]);
 
-	#ifndef NCACHING
 	initCache();
-	char cacheObject[bytes_left];
-	#endif
+	char cacheObject[MAX_OBJECT_SIZE];
+	char *currObject;
+	int currObjectSize;
 
     listenfd = Open_listenfd(port);
 	//printf("started listening\n");
@@ -69,11 +67,11 @@ int main(int argc, char **argv)
 	read_from_client(client_connfd, &nbr_headers, headers, client_uri, 
 					server_hostname, server_uri, &server_port);
 
-	#ifndef NCACHING 
 	if((cacheData = SearchNode(client_uri)) != NULL)		// Cache hit
 	{
+
 		get_filetype(cacheData->url, filetype);
-		// Send the headers to client
+		// Send the headers to client, or instead store headers along with object
 		sprintf(buf, "HTTP/1.0 200 OK\r\n");
     	sprintf(buf, "%sServer: Proxy Web Server\r\n", buf);
     	sprintf(buf, "%sContent-length: %d\r\n", buf, cacheData->length);
@@ -82,13 +80,15 @@ int main(int argc, char **argv)
 		
 		// Send the object to client
 	   	Rio_writen(client_connfd, cacheData->data, cacheData->length);
-	   	
+		//printf("Size of cached data block is %d\n", cacheData->length);
+		//printf("this data is %s\n", cacheData->data);
+			   	
 	    Close(client_connfd);
 	    continue;		// Move on to next transaction
 		
 	}
-	#endif
 
+	//printf("Cache miss happened\n");
 	server_connfd = Open_clientfd(server_hostname, server_port);
 	//printf("connection to server opened\n");
 	request_server(server_connfd, nbr_headers, headers, server_hostname, server_uri);
@@ -104,22 +104,27 @@ int main(int argc, char **argv)
 	int bytes_read = 0, n;
 	int bytes_left = content_size;
 
+	currObject = cacheObject;
+	currObjectSize = 0;
 	do{
 		n = transfer_response_content(&rio, response, client_connfd, bytes_left);
-#ifndef NCACHING
+/*
 		if(content_size <= MAX_OBJECT_SIZE)
 			strcat(cacheObject, response);	// what if char array response is no string but binary data ?
-#endif
+*/
+		// copy the current object being served
+		memcpy(currObject, response, n);
+		currObject += n;
+		currObjectSize += n;
+
 		bytes_read += n;
 		bytes_left -= n;
 	}while(bytes_left > 0);
 
-#ifndef NCACHING
-	if(content_size <= MAX_OBJECT_SIZE) // store data in cache
-	{
-		StoreData(client_uri , cacheObject, content_size);
-	}
-#endif
+	// Ensure currObjectSize is same as content_size
+
+	if(currObjectSize <= MAX_OBJECT_SIZE) // store data in cache
+		StoreData(client_uri , cacheObject, currObjectSize);
 
 	//Rio_writen(client_connfd, response, strlen(response));	
 	//printf("response read from server\n");
