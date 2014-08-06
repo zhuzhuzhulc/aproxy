@@ -6,8 +6,8 @@
 # Makefile to build your proxy from sources.
 #
 CC = gcc
-#CFLAGS = -g -Wall -DNCACHING
-CFLAGS = -g -DNCACHING
+CFLAGS = -g -Wall -DNCACHING
+#CFLAGS = -g -DNCACHING
 LDFLAGS = -lpthread
 
 OBJS = proxy.o csapp.o cache.o

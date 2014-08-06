@@ -314,7 +314,7 @@ void write_http_line(int server_connfd, char *line)
 int transfer_response_content(rio_t *rp, char *response, int client_connfd, int bytes_left)
 {
 	char buf[MAXLINE];
-	int bytes_read = 0, n;
+	int bytes_read = 0;
 	int bytes_to_copy = 0;
 	char *bufp = response;	
 	
