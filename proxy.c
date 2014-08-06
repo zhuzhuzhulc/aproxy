@@ -6,6 +6,14 @@
 * Andrew Id : rmuthoo
 */
 
+/*  NOTES :
+*	1. Caching has been implemented
+*	2. Proxy avoids termination in case of ECONNRESET and EPIPE through 
+*      appropriate changes to rio_readnb and Rio_writen respectively
+*   3. We ignore SIGPIPE signals as broken sockets can be detected later by Rio_readnb or Rio_writen 
+*/
+
+
 #include <stdio.h>
 #include "csapp.h"
 #include "cache.h"
@@ -67,6 +75,8 @@ int main(int argc, char **argv)
     }
     port = atoi(argv[1]);
 
+	// Ignoring SIGPIPE signals
+	Signal(SIGPIPE, SIG_IGN);
 	initCache();
 
     listenfd = Open_listenfd(port);
@@ -304,14 +314,21 @@ void write_http_line(int server_connfd, char *line)
 int transfer_response_content(rio_t *rp, char *response, int client_connfd, int bytes_left)
 {
 	char buf[MAXLINE];
-	int bytes_read = 0;
+	int bytes_read = 0, n;
 	int bytes_to_copy = 0;
 	char *bufp = response;	
+	
 
 	if(MAXLINE <= bytes_left)	bytes_to_copy = MAXLINE;
 	else						bytes_to_copy = bytes_left;
 
-	bytes_read += Rio_readnb(rp, buf, bytes_to_copy);
+	// Handle premature proxy<->server socket connection end
+	// Modified rio_readnb to prevent termination
+	if((bytes_read = Rio_readnb(rp, buf, bytes_to_copy)) == 0){
+    	clienterror(client_connfd, "GET failed", "ECONNRESET", "Very bad !",
+    		"Connection to server closed prematurely");
+	}
+
 	memcpy(bufp, buf, bytes_read);
 
 	Rio_writen(client_connfd, response, bytes_read);	
@@ -322,7 +339,6 @@ int transfer_response_content(rio_t *rp, char *response, int client_connfd, int 
 
 
 // These implementations are currently not in use
-
 
 /*
  * serve_static - copy a file back to the client 
@@ -399,7 +415,7 @@ void clienterror(int fd, char *cause, char *errnum,
     char buf[MAXLINE], body[MAXBUF];
 
     /* Build the HTTP response body */
-    sprintf(body, "<html><title>Tiny Error</title>");
+    sprintf(body, "<html><title>Proxy Error</title>");
     sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
     sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
     sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);

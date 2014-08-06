@@ -196,8 +196,8 @@ ssize_t Read(int fd, void *buf, size_t count)
 {
     ssize_t rc;
 
-    if ((rc = read(fd, buf, count)) < 0) 
-	unix_error("Read error");
+    if ((rc = read(fd, buf, count)) < 0)
+		unix_error("Read error");
     return rc;
 }
 
@@ -565,8 +565,6 @@ ssize_t rio_writen(int fd, void *usrbuf, size_t n)
 	    if (errno == EINTR)  /* interrupted by sig handler return */
 		nwritten = 0;    /* and call write() again */
 	    else{
-        	printf("n:%d\tnwritten: %d\tnleft:%d\n", (unsigned)n, (unsigned)nwritten, (unsigned)nleft);
-        	printf("offending buf: %s\n", (char *)usrbuf);
 			return -1;       /* errorno set by write() */
 		}
 	}
@@ -641,6 +639,8 @@ ssize_t rio_readnb(rio_t *rp, void *usrbuf, size_t n)
 	if ((nread = rio_read(rp, bufp, nleft)) < 0) {
 	    if (errno == EINTR) /* interrupted by sig handler return */
 		nread = 0;      /* call read() again */
+		else if(errno == ECONNRESET)
+		return 0;		/* return 0 bytes read due to connection reset */
 	    else
 		return -1;      /* errno set by read() */ 
 	} 
@@ -692,11 +692,12 @@ ssize_t Rio_readn(int fd, void *ptr, size_t nbytes)
     return n;
 }
 
-// Modified to return the number of bytes written 
+// Modified to prevent termination due to premature socket closure 
 void Rio_writen(int fd, void *usrbuf, size_t n) 
 {
-    if (rio_writen(fd, usrbuf, n) != n)
+    if (rio_writen(fd, usrbuf, n) < 0 && errno != EPIPE)
 	unix_error("Rio_writen error");
+		
 }
 
 void Rio_readinitb(rio_t *rp, int fd)
